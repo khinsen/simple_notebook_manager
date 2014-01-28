@@ -1,0 +1,6 @@
+MANIFEST
+build/
+dist/
+*.pyc
+*pycache*
+lib/SimpleNotebookManager.egg-info
