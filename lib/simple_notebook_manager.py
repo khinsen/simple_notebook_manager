@@ -1,3 +1,40 @@
+"""A simple NotebookManager for IPython
+
+The SimpleNotebookManager in this module is meant to illustrate
+the NotebookManager API. It is not useful for any application
+because it stores notebooks in memory, making them volatile.
+
+All notebook data is stored in the attribute 'tree', which
+is a dictionary mapping paths to dictionaries mapping
+names to notebooks.
+
+A notebook is represented by a dictionary with the following keys:
+
+ - 'created': the creation date
+
+ - 'ipynb': a string whose contents are the same as those of
+            a notebook file (.ipynb)
+
+ - 'ipynb_last_modified': the date of the last modification
+            of the entry 'ipynb'
+
+ - 'py': a string whose contents are the same as those of the
+         Python script file (.py)
+
+ - 'py_last_modified': the date of the last modification
+         of the entry 'py'
+
+ - 'checkpoints': a list of checkpoints
+
+Each entry of the checkpoint list is a tuple of three elements:
+
+ 0: the checkpoint_id (a string)
+
+ 1: the modification date of the checkpoint
+
+ 2: a copy of notebook['ipynb'] at the time of the checkpoint
+
+"""
 import itertools
 
 import copy
@@ -10,10 +47,9 @@ from IPython.html.services.notebooks.nbmanager import NotebookManager
 from IPython.nbformat import current
 from IPython.utils import tz
 
-class SimpleNotebookManager(NotebookManager):
 
-    # First part: the NotebookManager API
-    # These methods are required by IPython
+
+class SimpleNotebookManager(NotebookManager):
 
     def info_string(self):
         return "Serving notebooks from memory"
