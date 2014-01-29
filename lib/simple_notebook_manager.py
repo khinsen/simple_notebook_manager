@@ -1,13 +1,14 @@
 import itertools
 
+import copy
 from io import StringIO
+import os
 
 from tornado import web
 
 from IPython.html.services.notebooks.nbmanager import NotebookManager
 from IPython.nbformat import current
 from IPython.utils import tz
-
 
 class SimpleNotebookManager(NotebookManager):
 
@@ -19,7 +20,14 @@ class SimpleNotebookManager(NotebookManager):
 
     def __init__(self, **kwargs):
         super(SimpleNotebookManager, self).__init__(**kwargs)
-        self.tree = {}
+        self.tree = {'': {}}
+
+    # The method get_os_path does not exist in NotebookManager,
+    # but must be provided because it is called from 
+    # IPython.html.services.sessions.handlers.SessionRootHandler.post.
+    # It is not quite clear what this method should return.
+    def get_os_path(self, name=None, path=''):
+        return os.getcwd()
 
     def path_exists(self, path):
         """Does the API-style path (directory) actually exist?
@@ -34,8 +42,13 @@ class SimpleNotebookManager(NotebookManager):
         -------
         exists : bool
             Whether the path is indeed a directory.
+
+        Note: The empty path ('') must exist for the server to
+              start up properly.
         """
-        return path in self.tree
+        exists = path in self.tree
+        self.log.debug("path_exists('%s') -> %s", path, str(exists))
+        return exists
 
     def notebook_exists(self, name, path=''):
         """Returns a True if the notebook exists. Else, returns False.
@@ -51,7 +64,12 @@ class SimpleNotebookManager(NotebookManager):
         -------
         bool
         """
-        return self.path_exists(path) and name in self.tree[path]
+        assert name.endswith(self.filename_ext)
+
+        exists = self.path_exists(path) and name in self.tree[path]
+        self.log.debug("notebook_exists('%s', '%s') -> %s",
+                       name, path, str(exists))
+        return exists
 
     def list_notebooks(self, path=''):
         """Return a list of notebook dicts without content.
@@ -66,7 +84,7 @@ class SimpleNotebookManager(NotebookManager):
         """
         if self.path_exists(path):
             notebooks = [self.get_notebook_model(name, path, content=False)
-                         for name in self.tre[path]]
+                         for name in self.tree[path]]
         else:
             notebooks = []
         notebooks = sorted(notebooks, key=lambda item: item['name'])
@@ -91,6 +109,10 @@ class SimpleNotebookManager(NotebookManager):
             dict in the model as well.
         """
 
+        self.log.debug("get_notebook_model('%s', '%s', %s)",
+                       name, path, str(content))
+        assert name.endswith(self.filename_ext)
+
         if not self.notebook_exists(name, path):
             raise web.HTTPError(404, u'Notebook does not exist: %s' % name)
         notebook = self.tree[path][name]
@@ -101,27 +123,59 @@ class SimpleNotebookManager(NotebookManager):
         model['created'] = notebook['created']
         model ['last_modified'] = notebook['ipynb_last_modified']
         if content is True:
-            model['content'] = notebook['ipynb']
+            with StringIO(notebook['ipynb']) as f:
+                model['content'] = current.read(f, u'json')
+        self.log.debug("get_notebook_model -> %s", str(model))
         return model
 
+    # NotebookManager.create_notebook_model is a complete
+    # working implementation. It is overridden here only
+    # to add logging for debugging.
+    # Note however that increment_filename must be reimplemented
+    # because the version in NotebookManager has a bug.
     def create_notebook_model(self, model=None, path=''):
         """Create a new notebook and return its model with no content."""
-        if model is None:
-            now = tz.utcnow()
-            model = {'created': now,
-                     'last_modified': now}
-        if 'name' not in model:
-            model['name'] = self._increment_filename('Untitled', path)
-        if 'content' not in model:
-            metadata = current.new_metadata(name=u'')
-            model['content'] = current.new_notebook(metadata=metadata)
+        new_model = super(SimpleNotebookManager, self) \
+                         .create_notebook_model(model, path)
+        self.log.debug("create_notebook_model(%s, '%s') -> %s",
+                       str(model), path, str(new_model))
+        return new_model
 
-        model['path'] = path
-        model = self.save_notebook_model(model, model['name'], model['path'])
-        return model
+    def increment_filename(self, basename, path=''):
+        """Increment a notebook name to make it unique.
+
+        Parameters
+        ----------
+        basename : unicode
+            The base name of a notebook (no extension .ipynb)
+        path : unicode
+            The URL path of the notebooks directory
+
+        Returns
+        -------
+        filename : unicode
+            The complete filename (with extension .ipynb) for
+            a new notebook, guaranteed not to exist yet.
+        """
+        self.log.debug("increment_filename('%s', '%s')",
+                       str(basename), str(path))
+        assert self.path_exists(path)
+
+        notebooks = self.tree[path]
+        for i in itertools.count():
+            name = u'{basename}{i}'.format(basename=basename, i=i)
+            if name not in notebooks:
+                break
+        name = name + self.filename_ext
+        self.log.debug("increment_filename -> '%s'", str(name))
+        return name
 
     def save_notebook_model(self, model, name, path=''):
         """Save the notebook model and return the model with no content."""
+
+        self.log.debug("save_notebook_model(%s, '%s', '%s')",
+                       model, str(name), str(path))
+        assert name.endswith(self.filename_ext)
 
         if 'content' not in model:
             raise web.HTTPError(400, u'No notebook JSON data provided')
@@ -151,18 +205,24 @@ class SimpleNotebookManager(NotebookManager):
 
         # Save .py script as well
         py_stream = StringIO()
-        current.write(nb, ipynb_stream, u'json')
+        current.write(nb, py_stream, u'json')
         notebook['py'] = py_stream.getvalue()
         notebook['py_last_modified'] = tz.utcnow()
         py_stream.close()
 
         # Return model
         model = self.get_notebook_model(new_name, new_path, content=False)
+        self.log.debug("save_notebook_model -> %s", model)
         return model
 
     def rename_notebook(self, name, path, new_name, new_path):
         """Rename a notebook."""
+        self.log.debug("rename_notebook('%s', '%s', '%s', '%s')",
+                       str(name), str(path), str(new_name), str(new_path))
+        assert name.endswith(self.filename_ext)
+        assert new_name.endswith(self.filename_ext)
         assert self.notebook_exists(name, path)
+
         notebook = self.tree[path][name]
         if new_path not in self.tree:
             self.tree[new_path] = {}
@@ -171,31 +231,11 @@ class SimpleNotebookManager(NotebookManager):
 
     def delete_notebook_model(self, name, path=''):
         """Delete notebook by name and path."""
+        self.log.debug("delete_notebook_model('%s', '%s')",
+                       str(name), str(path))
+        assert name.endswith(self.filename_ext)
         assert self.notebook_exists(name, path)
+
         del self.tree[path][name]
         if len(self.tree[path]) == 0:
             del self.tree[path]
-
-    # Second part: implementation details
-    # These methods are used in the implementation of
-    # SimpleNotebookManager, but are not called from elseehere.
-
-    def _increment_filename(self, basename, path=''):
-        """Increment a notebook name to make it unique.
-        
-        Parameters
-        ----------
-        basename : unicode
-            The name of a notebook
-        path : unicode
-            The URL path of the notebooks directory
-        """
-        assert self.path_exists(path)
-        notebooks = self.tree[path]
-        for i in itertools.count():
-            name = u'{basename}{i}'.format(basename=basename, i=i)
-            if name not in notebooks:
-                break
-        return name
-
-

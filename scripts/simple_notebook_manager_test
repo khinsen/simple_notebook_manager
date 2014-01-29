@@ -6,6 +6,7 @@ from IPython.config.loader import Config
 
 c = Config()
 c.NotebookApp.notebook_manager_class = 'simple_notebook_manager.SimpleNotebookManager'
+c.NotebookApp.log_level = 'DEBUG'
 
 app = NotebookApp(config=c)
 app.initialize(argv=[])
