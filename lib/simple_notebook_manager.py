@@ -180,6 +180,11 @@ class SimpleNotebookManager(NotebookManager):
         if 'content' not in model:
             raise web.HTTPError(400, u'No notebook JSON data provided')
         
+        # One checkpoint should always exist
+        if self.notebook_exists(name, path) \
+           and not self.list_checkpoints(name, path):
+            self.create_checkpoint(name, path)
+
         new_path = model.get('path', path)
         new_name = model.get('name', name)
 
@@ -190,7 +195,8 @@ class SimpleNotebookManager(NotebookManager):
         if new_path not in self.tree:
             self.tree[new_path] = {}
         if new_name not in self.tree[new_path]:
-            self.tree[new_path][new_name] = {'created': tz.utcnow()}
+            self.tree[new_path][new_name] = \
+                   dict(created = tz.utcnow(), checkpoints=[])
         notebook = self.tree[new_path][new_name]
 
         # Save the notebook file
@@ -218,7 +224,7 @@ class SimpleNotebookManager(NotebookManager):
     def rename_notebook(self, name, path, new_name, new_path):
         """Rename a notebook."""
         self.log.debug("rename_notebook('%s', '%s', '%s', '%s')",
-                       str(name), str(path), str(new_name), str(new_path))
+                       name, path, new_name, new_path)
         assert name.endswith(self.filename_ext)
         assert new_name.endswith(self.filename_ext)
         assert self.notebook_exists(name, path)
@@ -239,3 +245,83 @@ class SimpleNotebookManager(NotebookManager):
         del self.tree[path][name]
         if len(self.tree[path]) == 0:
             del self.tree[path]
+
+    # Note: I don't understand why this method is needed,
+    # nor under which circumstances it is called.
+    def update_notebook_model(self, model, name, path=''):
+        """Update the notebook's path and/or name"""
+        self.log.debug("upate_notebook_model(%s, '%s', '%s')",
+                       str(model), name, path)
+        assert name.endswith(self.filename_ext)
+        assert self.notebook_exists(name, path)
+
+        new_name = model.get('name', name)
+        new_path = model.get('path', path)
+        if path != new_path or name != new_name:
+            self.rename_notebook(name, path, new_name, new_path)
+        model = self.get_notebook_model(new_name, new_path, content=False)
+        self.log.debug("upate_notebook_model -> %s", str(model))
+        return model
+
+    def create_checkpoint(self, name, path=''):
+        """Create a checkpoint of the current state of a notebook
+
+        Returns a checkpoint_id for the new checkpoint.
+        """
+        assert name.endswith(self.filename_ext)
+        assert self.notebook_exists(name, path)
+
+        notebook = self.tree[path][name]
+        checkpoint_id = "checkpoint-%d" % (len(notebook['checkpoints'])+1)
+        last_modified = notebook['ipynb_last_modified']
+        notebook['checkpoints'].append((checkpoint_id,
+                                        last_modified,
+                                        notebook['ipynb']))
+        return dict(id=checkpoint_id, last_modified=last_modified)
+
+    def list_checkpoints(self, name, path=''):
+        """Return a list of checkpoints for a given notebook"""
+        assert name.endswith(self.filename_ext)
+        assert self.notebook_exists(name, path)
+
+        checkpoints = self.tree[path][name]['checkpoints']
+        checkpoint_info = [dict(id=checkpoint_id, last_modified=last_modified)
+                           for checkpoint_id, last_modified, _ in checkpoints]
+        self.log.debug("list_checkpoints('%s', '%s') -> %s",
+                       name, path, str(checkpoint_info))
+        return checkpoint_info
+
+    def restore_checkpoint(self, checkpoint_id, name, path=''):
+        """Restore a notebook from one of its checkpoints"""
+        self.log.debug("restore_checkpoints(%s,'%s', '%s')",
+                       repr(checkpoint_id), name, path)
+        assert name.endswith(self.filename_ext)
+        assert self.notebook_exists(name, path)
+
+        notebook = self.tree[path][name]
+        checkpoints = self.tree[path][name]['checkpoints']
+        for id, last_modified, ipynb in checkpoints:
+            if id == checkpoint_id:
+                # this must succeed since the checkpoint_id
+                # passed in comes from calling list_checkpoints
+                break
+        notebook['ipynb_last_modified'] = last_modified
+        notebook['ipynb'] = ipynb
+
+    # There doesn't seem to be a way to actually delete a
+    # checkpoint through the notebook interface.
+    def delete_checkpoint(self, checkpoint_id, name, path=''):
+        """delete a checkpoint for a notebook"""
+        self.log.debug("delete_checkpoints(%s,'%s', '%s')",
+                       repr(checkpoint_id), name, path)
+        assert name.endswith(self.filename_ext)
+        assert self.notebook_exists(name, path)
+
+        notebook = self.tree[path][name]
+        checkpoints = self.tree[path][name]['checkpoints']
+        for i in range(len(checkpoints)):
+            if checkpoints[i][0] == checkpoint_id:
+                # this must succeed since the checkpoint_id
+                # passed in comes from calling list_checkpoints
+                break
+        del checkpoints[i]
