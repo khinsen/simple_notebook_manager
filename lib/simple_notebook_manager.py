@@ -48,23 +48,30 @@ from IPython.nbformat import current
 from IPython.utils import tz
 
 
-
 class SimpleNotebookManager(NotebookManager):
-
-    def info_string(self):
-        return "Serving notebooks from memory"
 
     def __init__(self, **kwargs):
         super(SimpleNotebookManager, self).__init__(**kwargs)
+        # Initialize the database to the required minimum:
+        # The empty path must exist.
         self.tree = {'': {}}
+
+    # The return value of info_string() is shown in the
+    # log output of the notebook server.
+    def info_string(self):
+        return "Serving notebooks from memory"
 
     # The method get_os_path does not exist in NotebookManager,
     # but must be provided because it is called from 
     # IPython.html.services.sessions.handlers.SessionRootHandler.post.
-    # It is not quite clear what this method should return.
+    # Its return value is used to construct the working directory
+    # for the kernel that executes code from the notebook.
     def get_os_path(self, name=None, path=''):
         return os.getcwd()
 
+    # The method path_exists is called by the server to check
+    # if the path given in a URL corresponds to a directory
+    # potentially containing notebooks, or to something else.
     def path_exists(self, path):
         """Does the API-style path (directory) actually exist?
         
@@ -86,6 +93,8 @@ class SimpleNotebookManager(NotebookManager):
         self.log.debug("path_exists('%s') -> %s", path, str(exists))
         return exists
 
+    # The method notebook_exists is called by the server to verify the
+    # existence of a notebook before rendering it.
     def notebook_exists(self, name, path=''):
         """Returns a True if the notebook exists. Else, returns False.
 
@@ -101,12 +110,14 @@ class SimpleNotebookManager(NotebookManager):
         bool
         """
         assert name.endswith(self.filename_ext)
-
         exists = self.path_exists(path) and name in self.tree[path]
         self.log.debug("notebook_exists('%s', '%s') -> %s",
                        name, path, str(exists))
         return exists
 
+    # The method list_notebooks is called by the server to prepare
+    # the list of notebooks for a path given in the URL.
+    # It is not clear if the existence of the path is guaranteed.
     def list_notebooks(self, path=''):
         """Return a list of notebook dicts without content.
 
@@ -127,6 +138,8 @@ class SimpleNotebookManager(NotebookManager):
         self.log.debug("list_notebooks('%s') -> %s", path, notebooks)
         return notebooks
 
+    # The method get_notebook_model is called by the server
+    # retrieve the contents of a notebook for rendering.
     def get_notebook_model(self, name, path='', content=True):
         """ Takes a path and name for a notebook and returns its model
         
@@ -177,6 +190,12 @@ class SimpleNotebookManager(NotebookManager):
                        str(model), path, str(new_model))
         return new_model
 
+    # NotebookManager.increment_filename is called by
+    # NotebookManager.create_notebook_model for choosing
+    # a name for the newly created notebook. The default
+    # implementation has a bug, and is not sufficient
+    # for any realistic NotebookManager, so we need
+    # to override it.
     def increment_filename(self, basename, path=''):
         """Increment a notebook name to make it unique.
 
@@ -206,6 +225,18 @@ class SimpleNotebookManager(NotebookManager):
         self.log.debug("increment_filename -> '%s'", str(name))
         return name
 
+    # The method save_notebook_model is called periodically
+    # by the auto-save functionality of the notebook server.
+    # It gets a model, which contains a name and a path,
+    # plus explicit name and path arguments. When the user
+    # renames a notebook, the new name and path are stored
+    # in the model, and the next save operation causes a
+    # rename of the file.
+    # The code below also ensures that there is always a
+    # checkpoint available, even before the first user-generated
+    # checkpoint. It does so because FileNotebookManager does
+    # the same. It is not clear if anything in the notebook
+    # server requires this.
     def save_notebook_model(self, model, name, path=''):
         """Save the notebook model and return the model with no content."""
 
@@ -225,7 +256,7 @@ class SimpleNotebookManager(NotebookManager):
         new_name = model.get('name', name)
 
         if path != new_path or name != new_name:
-            self.rename_notebook(name, path, new_name, new_path)
+            self._rename_notebook(name, path, new_name, new_path)
 
         # Create the path and notebook entries if necessary
         if new_path not in self.tree:
@@ -257,20 +288,10 @@ class SimpleNotebookManager(NotebookManager):
         self.log.debug("save_notebook_model -> %s", model)
         return model
 
-    def rename_notebook(self, name, path, new_name, new_path):
-        """Rename a notebook."""
-        self.log.debug("rename_notebook('%s', '%s', '%s', '%s')",
-                       name, path, new_name, new_path)
-        assert name.endswith(self.filename_ext)
-        assert new_name.endswith(self.filename_ext)
-        assert self.notebook_exists(name, path)
-
-        notebook = self.tree[path][name]
-        if new_path not in self.tree:
-            self.tree[new_path] = {}
-        self.tree[new_path][new_name] = notebook
-        self.delete_notebook_model(name, path)
-
+    # The method delete_notebook_mode is called by the server
+    # when the user asks for the deleting of a notebook.
+    # It deletes the notebook from storage, not just
+    # the model from memory.
     def delete_notebook_model(self, name, path=''):
         """Delete notebook by name and path."""
         self.log.debug("delete_notebook_model('%s', '%s')",
@@ -282,8 +303,9 @@ class SimpleNotebookManager(NotebookManager):
         if len(self.tree[path]) == 0:
             del self.tree[path]
 
-    # Note: I don't understand why this method is needed,
-    # nor under which circumstances it is called.
+    # The method update_notebook_model is called by the server
+    # when the user renames a notebook. It is not quite clear
+    # what the difference to saving under a new name it.
     def update_notebook_model(self, model, name, path=''):
         """Update the notebook's path and/or name"""
         self.log.debug("upate_notebook_model(%s, '%s', '%s')",
@@ -294,15 +316,21 @@ class SimpleNotebookManager(NotebookManager):
         new_name = model.get('name', name)
         new_path = model.get('path', path)
         if path != new_path or name != new_name:
-            self.rename_notebook(name, path, new_name, new_path)
+            self._rename_notebook(name, path, new_name, new_path)
         model = self.get_notebook_model(new_name, new_path, content=False)
         self.log.debug("upate_notebook_model -> %s", str(model))
         return model
 
+    # The method create_checkpoint is called by the server when
+    # the user selects "save and checkpoint". It must assign a
+    # unique checkpoint id to the checkpoint. It is not clear what
+    # the allowed values are, but strings work fine (they are not
+    # shown to the user).
     def create_checkpoint(self, name, path=''):
         """Create a checkpoint of the current state of a notebook
 
-        Returns a checkpoint_id for the new checkpoint.
+        Returns a dictionary with entries "id" and
+        "last_modified" describing the checkpoint.
         """
         assert name.endswith(self.filename_ext)
         assert self.notebook_exists(name, path)
@@ -315,6 +343,10 @@ class SimpleNotebookManager(NotebookManager):
                                         notebook['ipynb']))
         return dict(id=checkpoint_id, last_modified=last_modified)
 
+    # The method list_checkpoints is called by the server to
+    # prepare the list of checkpoints shown in the File menu
+    # of the notebook. It returns a list of dictionaries, which
+    # have the same structure as those returned by create_checkpoint.
     def list_checkpoints(self, name, path=''):
         """Return a list of checkpoints for a given notebook"""
         assert name.endswith(self.filename_ext)
@@ -327,6 +359,10 @@ class SimpleNotebookManager(NotebookManager):
                        name, path, str(checkpoint_info))
         return checkpoint_info
 
+    # The method restore_checkpoint is called by the server when
+    # the user asks to restore the notebook state from a checkpoint.
+    # The checkpoint is identified by its id, the notebook as
+    # usual by name and path.
     def restore_checkpoint(self, checkpoint_id, name, path=''):
         """Restore a notebook from one of its checkpoints"""
         self.log.debug("restore_checkpoints(%s,'%s', '%s')",
@@ -344,8 +380,10 @@ class SimpleNotebookManager(NotebookManager):
         notebook['ipynb_last_modified'] = last_modified
         notebook['ipynb'] = ipynb
 
-    # There doesn't seem to be a way to actually delete a
-    # checkpoint through the notebook interface.
+    # There is a call to delete_checkpoint in the notebook handler
+    # code, but there doesn't seem to be a way to actually delete a
+    # checkpoint through the notebook interface, so the code
+    # below is untested.
     def delete_checkpoint(self, checkpoint_id, name, path=''):
         """delete a checkpoint for a notebook"""
         self.log.debug("delete_checkpoints(%s,'%s', '%s')",
@@ -361,3 +399,19 @@ class SimpleNotebookManager(NotebookManager):
                 # passed in comes from calling list_checkpoints
                 break
         del checkpoints[i]
+
+    #
+    # Helper methods that are not part of the NotebookManager API
+    #
+    def _rename_notebook(self, name, path, new_name, new_path):
+        """Rename a notebook."""
+        assert name.endswith(self.filename_ext)
+        assert new_name.endswith(self.filename_ext)
+        assert self.notebook_exists(name, path)
+
+        notebook = self.tree[path][name]
+        if new_path not in self.tree:
+            self.tree[new_path] = {}
+        self.tree[new_path][new_name] = notebook
+        self.delete_notebook_model(name, path)
+
