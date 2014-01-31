@@ -7,4 +7,4 @@ This notebook manager stores all notebooks in memory, meaning
 that they are lost when the server is stopped. It is completely
 useless for practical applications.
 
-Requires Python 3.x, tested with 3.3.
+The code has bee tested with Python 2.7 and 3.3.
