@@ -173,7 +173,9 @@ class SimpleNotebookManager(NotebookManager):
         model ['last_modified'] = notebook['ipynb_last_modified']
         if content is True:
             with StringIO(notebook['ipynb']) as f:
-                model['content'] = current.read(f, u'json')
+                nb = current.read(f, u'json')
+            self.mark_trusted_cells(nb, path, name)
+            model['content'] = nb
         self.log.debug("get_notebook_model -> %s", str(model))
         return model
 
@@ -268,6 +270,7 @@ class SimpleNotebookManager(NotebookManager):
 
         # Save the notebook file
         nb = current.to_notebook_json(model['content'])
+        self.check_and_sign(nb, new_path, new_name)
         if 'name' in nb['metadata']:
             nb['metadata']['name'] = u''
         ipynb_stream = StringIO()
