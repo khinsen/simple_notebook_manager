@@ -55,6 +55,10 @@ class SimpleNotebookManager(NotebookManager):
         # Initialize the database to the required minimum:
         # The empty path must exist.
         self.tree = {'': {}}
+        # Add more paths to let list_dirs return something
+        # non-trivial:
+        self.tree['foo'] = {}
+        self.tree['foo/bar'] = {}
 
     # The return value of info_string() is shown in the
     # log output of the notebook server.
@@ -89,9 +93,30 @@ class SimpleNotebookManager(NotebookManager):
         Note: The empty path ('') must exist for the server to
               start up properly.
         """
-        exists = path in self.tree
+        exists = path.strip('/') in self.tree
         self.log.debug("path_exists('%s') -> %s", path, str(exists))
         return exists
+
+    # The method is_hidden is called by the server to check if
+    # a path is hidden. In the file-based manager, this corresponds
+    # to directories whose name starts with a dot.
+    def is_hidden(self, path):
+        """Does the API style path correspond to a hidden directory or file?
+        
+        Parameters
+        ----------
+        path : string
+            The path to check. This is an API path (`/` separated,
+            relative to base notebook-dir).
+        
+        Returns
+        -------
+        hidden : bool
+            Whether the path is hidden.
+        
+        """
+        # Nothing is hidden.
+        return False
 
     # The method notebook_exists is called by the server to verify the
     # existence of a notebook before rendering it.
@@ -110,10 +135,56 @@ class SimpleNotebookManager(NotebookManager):
         bool
         """
         assert name.endswith(self.filename_ext)
-        exists = self.path_exists(path) and name in self.tree[path]
+        exists = self.path_exists(path) and name in self.tree[path.strip('/')]
         self.log.debug("notebook_exists('%s', '%s') -> %s",
                        name, path, str(exists))
         return exists
+
+    # The method list_dirs is called by the server to identify
+    # the subdirectories in a given path.
+    def list_dirs(self, path):
+        """List the directory models for a given API style path."""
+        self.log.debug("list_dirs('%s')", path)
+        path = path.strip('/')
+        if path == '':
+            prefix = ''
+        else:
+            prefix = path + '/'
+        names = [p[len(prefix):]
+                 for p in self.tree
+                 if p.startswith(prefix)]
+        dirs = [self.get_dir_model(name, path)
+                for name in names
+                if name and '/' not in name]
+        dirs = sorted(dirs, key=lambda item: item['name'])
+        self.log.debug("list_dirs -> %s", str(dirs))
+        return dirs
+
+    # The NotebookManager API says this method should be implemented,
+    # but it doesn't seem to be called from anywhere except the above
+    # method list_dirs.
+    def get_dir_model(self, name, path=''):
+        """Get the directory model given a directory name and its API style path.
+        
+        The keys in the model should be:
+        * name
+        * path
+        * last_modified
+        * created
+        * type='directory'
+        """
+        if not self.path_exists(path):
+            raise IOError('directory does not exist: %r' % path)
+        # Create the directory model.
+        model ={}
+        model['name'] = name
+        model['path'] = path.strip('/')
+        model['last_modified'] = tz.utcnow()
+        model['created'] = tz.utcnow()
+        model['type'] = 'directory'
+        self.log.debug("get_dir_model('%s', '%s') -> %s",
+                       name, path, str(model))
+        return model
 
     # The method list_notebooks is called by the server to prepare
     # the list of notebooks for a path given in the URL.
@@ -131,7 +202,7 @@ class SimpleNotebookManager(NotebookManager):
         """
         if self.path_exists(path):
             notebooks = [self.get_notebook_model(name, path, content=False)
-                         for name in self.tree[path]]
+                         for name in self.tree[path.strip('/')]]
         else:
             notebooks = []
         notebooks = sorted(notebooks, key=lambda item: item['name'])
@@ -164,9 +235,11 @@ class SimpleNotebookManager(NotebookManager):
 
         if not self.notebook_exists(name, path):
             raise web.HTTPError(404, u'Notebook does not exist: %s' % name)
+        path = path.strip('/')
         notebook = self.tree[path][name]
 
         model ={}
+        model['type'] = 'notebook'
         model['name'] = name
         model['path'] = path
         model['created'] = notebook['created']
@@ -217,6 +290,7 @@ class SimpleNotebookManager(NotebookManager):
         self.log.debug("increment_filename('%s', '%s')",
                        str(basename), str(path))
         assert self.path_exists(path)
+        path = path.strip('/')
 
         notebooks = self.tree[path]
         for i in itertools.count():
@@ -245,6 +319,7 @@ class SimpleNotebookManager(NotebookManager):
         self.log.debug("save_notebook_model(%s, '%s', '%s')",
                        model, str(name), str(path))
         assert name.endswith(self.filename_ext)
+        path = path.strip('/')
 
         if 'content' not in model:
             raise web.HTTPError(400, u'No notebook JSON data provided')
@@ -301,6 +376,7 @@ class SimpleNotebookManager(NotebookManager):
                        str(name), str(path))
         assert name.endswith(self.filename_ext)
         assert self.notebook_exists(name, path)
+        path = path.strip('/')
 
         del self.tree[path][name]
         if len(self.tree[path]) == 0:
@@ -315,6 +391,7 @@ class SimpleNotebookManager(NotebookManager):
                        str(model), name, path)
         assert name.endswith(self.filename_ext)
         assert self.notebook_exists(name, path)
+        path = path.strip('/')
 
         new_name = model.get('name', name)
         new_path = model.get('path', path)
@@ -337,6 +414,7 @@ class SimpleNotebookManager(NotebookManager):
         """
         assert name.endswith(self.filename_ext)
         assert self.notebook_exists(name, path)
+        path = path.strip('/')
 
         notebook = self.tree[path][name]
         checkpoint_id = "checkpoint-%d" % (len(notebook['checkpoints'])+1)
@@ -354,6 +432,7 @@ class SimpleNotebookManager(NotebookManager):
         """Return a list of checkpoints for a given notebook"""
         assert name.endswith(self.filename_ext)
         assert self.notebook_exists(name, path)
+        path = path.strip('/')
 
         checkpoints = self.tree[path][name]['checkpoints']
         checkpoint_info = [dict(id=checkpoint_id, last_modified=last_modified)
@@ -372,6 +451,7 @@ class SimpleNotebookManager(NotebookManager):
                        repr(checkpoint_id), name, path)
         assert name.endswith(self.filename_ext)
         assert self.notebook_exists(name, path)
+        path = path.strip('/')
 
         notebook = self.tree[path][name]
         checkpoints = self.tree[path][name]['checkpoints']
@@ -393,6 +473,7 @@ class SimpleNotebookManager(NotebookManager):
                        repr(checkpoint_id), name, path)
         assert name.endswith(self.filename_ext)
         assert self.notebook_exists(name, path)
+        path = path.strip('/')
 
         notebook = self.tree[path][name]
         checkpoints = self.tree[path][name]['checkpoints']
@@ -411,6 +492,7 @@ class SimpleNotebookManager(NotebookManager):
         assert name.endswith(self.filename_ext)
         assert new_name.endswith(self.filename_ext)
         assert self.notebook_exists(name, path)
+        path = path.strip('/')
 
         notebook = self.tree[path][name]
         if new_path not in self.tree:
