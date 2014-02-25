@@ -45,10 +45,17 @@ from tornado import web
 
 from IPython.html.services.notebooks.nbmanager import NotebookManager
 from IPython.nbformat import current
+from IPython.utils.traitlets import Unicode
 from IPython.utils import tz
 
 
 class SimpleNotebookManager(NotebookManager):
+
+    # The configurable attribute notebook_dir makes sense
+    # only for notebooks that are stored in the computer's
+    # file system. However, it has to be present, so
+    # we include it here but never use it.
+    notebook_dir = Unicode(u"", config=True)
 
     def __init__(self, **kwargs):
         super(SimpleNotebookManager, self).__init__(**kwargs)
@@ -64,14 +71,6 @@ class SimpleNotebookManager(NotebookManager):
     # log output of the notebook server.
     def info_string(self):
         return "Serving notebooks from memory"
-
-    # The method get_os_path does not exist in NotebookManager,
-    # but must be provided because it is called from 
-    # IPython.html.services.sessions.handlers.SessionRootHandler.post.
-    # Its return value is used to construct the working directory
-    # for the kernel that executes code from the notebook.
-    def get_os_path(self, name=None, path=''):
-        return os.getcwd()
 
     # The method path_exists is called by the server to check
     # if the path given in a URL corresponds to a directory
